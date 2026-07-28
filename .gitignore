@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+*.faiss
+.DS_Store
+
+# Course PDFs used for evaluation and generated eval reports -- not source code
+eval/materials/*.pdf
+eval/eval_report.md
+eval/eval_report.csv
+.pytest_cache/

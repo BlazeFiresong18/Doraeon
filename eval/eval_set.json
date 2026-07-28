@@ -1,0 +1,23 @@
+[
+  {
+    "id": "example-1",
+    "question": "REPLACE ME: a question your course materials actually answer",
+    "expected_answer": "REPLACE ME: the correct answer, in your own words, as it should appear in the PDF",
+    "expected_source_filename": "REPLACE ME: exact filename as uploaded, e.g. Lecture3.pdf",
+    "expected_source_page": 1
+  },
+  {
+    "id": "example-2",
+    "question": "REPLACE ME",
+    "expected_answer": "REPLACE ME",
+    "expected_source_filename": "REPLACE ME",
+    "expected_source_page": 1
+  },
+  {
+    "id": "example-3",
+    "question": "REPLACE ME",
+    "expected_answer": "REPLACE ME",
+    "expected_source_filename": "REPLACE ME",
+    "expected_source_page": 1
+  }
+]
