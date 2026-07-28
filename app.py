@@ -99,12 +99,16 @@ def append_turn(user_text: str, resp: RAGResponse) -> None:
             "generation_ms": resp.generation_ms,
             "error": resp.error,
             "rewritten_question": resp.rewritten_question,
+            "grounded": resp.grounded,
+            "refused": resp.refused,
             "msg_id": st.session_state.msg_counter,
         }
     )
 
 
-def run_rag(question: str, top_k: int, subj: str | None, unit: str | None, min_score: float) -> RAGResponse:
+def run_rag(
+    question: str, top_k: int, subj: str | None, unit: str | None, min_score: float, strict_mode: bool
+) -> RAGResponse:
     pipeline = RAGPipeline(st.session_state.doraeon_index)
     return pipeline.generate_answer(
         question,
@@ -115,29 +119,35 @@ def run_rag(question: str, top_k: int, subj: str | None, unit: str | None, min_s
         # Only complete turns already in chat_history at call time -- the
         # in-flight question is appended separately afterward via append_turn.
         history=extract_history_turns(st.session_state.chat_history),
+        strict_mode=strict_mode,
     )
 
 
 def render_assistant_message(msg: dict) -> None:
     msg_id = msg.get("msg_id", 0)
     sources = msg.get("sources") or []
+    grounded = msg.get("grounded", True)
+    refused = msg.get("refused", False)
 
     if msg.get("rewritten_question"):
         st.caption(f"🔎 Searched for: _{msg['rewritten_question']}_")
 
     if msg.get("error") == "missing_api_key":
         st.info(msg["content"])
-    elif msg.get("error") == "below_confidence_threshold":
+    elif refused:
         st.warning(f"🚫 {msg['content']}")
     else:
+        if not grounded and not msg.get("error"):
+            # Soft-mode fallback that actually succeeded: a real answer, but
+            # not from the uploaded materials -- flagged visually beyond the
+            # inline disclaimer text so it's never mistaken for a grounded,
+            # cited answer. Not shown if this is actually an error message
+            # (e.g. the general-knowledge call itself hit a rate limit).
+            st.caption("🌐 General knowledge (not from your uploaded materials)")
         render_answer_card(msg["content"])
 
     if sources:
-        label = (
-            "##### 📎 Closest matches found (below confidence threshold)"
-            if msg.get("error") == "below_confidence_threshold"
-            else "##### 📎 Sources"
-        )
+        label = "##### 📎 Sources" if grounded else "##### 📎 Closest matches found (below confidence threshold)"
         st.markdown(label)
         render_citation_pills(sources)
         render_meta_strip(len(sources), retrieval_ms=msg.get("retrieval_ms"), generation_ms=msg.get("generation_ms"))
@@ -168,6 +178,13 @@ with st.sidebar:
             get_min_retrieval_score(),
             step=0.05,
             help="Below this similarity score, Doraeon refuses to answer instead of guessing.",
+        )
+        strict_mode = st.checkbox(
+            "Strict mode: only answer from uploaded materials",
+            value=True,
+            help="On: refuse when nothing clears the confidence threshold (exam-prep grounding). "
+            "Off: fall back to general knowledge with a clear disclaimer, and no source citations "
+            "on that fallback answer (general help).",
         )
         filter_subject = st.text_input("Filter subject", placeholder="All")
         filter_unit = st.text_input("Filter unit", placeholder="All")
@@ -256,7 +273,7 @@ with tab_tools:
             else:
                 with st.spinner("Summarizing…"):
                     p = RAGPipeline(st.session_state.doraeon_index)
-                    resp = summarize_topic(p, topic_input, top_k=top_k, min_score=min_score)
+                    resp = summarize_topic(p, topic_input, top_k=top_k, min_score=min_score, strict_mode=strict_mode)
                 append_turn(f"Summarize: {topic_input}", resp)
                 st.rerun()
     with c3:
@@ -266,7 +283,9 @@ with tab_tools:
             else:
                 with st.spinner("Creating flashcards…"):
                     p = RAGPipeline(st.session_state.doraeon_index)
-                    resp = generate_flashcards(p, topic_input, int(n_cards), top_k=top_k, min_score=min_score)
+                    resp = generate_flashcards(
+                        p, topic_input, int(n_cards), top_k=top_k, min_score=min_score, strict_mode=strict_mode
+                    )
                 append_turn(f"Flashcards: {topic_input}", resp)
                 st.rerun()
     with c4:
@@ -276,7 +295,9 @@ with tab_tools:
             else:
                 with st.spinner("Predicting exam questions…"):
                     p = RAGPipeline(st.session_state.doraeon_index)
-                    resp = predict_exam_questions(p, topic_input, int(n_cards), top_k=top_k, min_score=min_score)
+                    resp = predict_exam_questions(
+                        p, topic_input, int(n_cards), top_k=top_k, min_score=min_score, strict_mode=strict_mode
+                    )
                 append_turn(f"Predict exam questions: {topic_input}", resp)
                 st.rerun()
 
@@ -310,7 +331,7 @@ with tab_chat:
         else:
             with st.status("Thinking…", expanded=False) as status:
                 status.update(label="🔍 Retrieving relevant sources…")
-                resp = run_rag(question, top_k, subj_filter, unit_filter, min_score)
+                resp = run_rag(question, top_k, subj_filter, unit_filter, min_score, strict_mode)
                 status.update(label="✨ Generating answer…")
                 status.update(state="complete")
             append_turn(question, resp)

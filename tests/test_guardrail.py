@@ -37,18 +37,22 @@ def test_direct_match_question_passes_guardrail_and_calls_llm():
     assert resp.answer == "Web analytics tracks user behavior on websites."
     assert mock_call.called
     assert resp.sources[0].confidence > 0.5
+    assert resp.grounded is True
+    assert resp.refused is False
 
 
-def test_unrelated_question_triggers_guardrail_without_calling_llm():
+def test_unrelated_question_triggers_guardrail_without_calling_llm_in_strict_mode():
     pipeline = _pipeline_with_indexed_doc()
 
     with patch("core.rag_pipeline.call_chat_completion") as mock_call:
-        resp = pipeline.generate_answer("What is the boiling point of water?", min_score=0.35)
+        resp = pipeline.generate_answer("What is the boiling point of water?", min_score=0.35, strict_mode=True)
 
     assert resp.error == "below_confidence_threshold"
     assert resp.answer == "This isn't covered in your uploaded materials."
     assert resp.sources  # still surfaced for transparency
-    assert not mock_call.called  # never even attempted -- the whole point of the guardrail
+    assert resp.grounded is False
+    assert resp.refused is True
+    assert not mock_call.called  # never even attempted -- the whole point of strict mode
 
 
 def test_guardrail_threshold_is_configurable():
@@ -89,3 +93,77 @@ def test_rewritten_question_used_for_both_guardrail_and_generation():
 
     assert resp.error is None  # would have been refused had the raw fragment been used
     assert resp.rewritten_question == "Explain the gist of Web Analytics"
+
+
+# ---------------------------------------------------------------------------
+# Soft mode (strict_mode=False): fall back to general knowledge with a
+# disclaimer instead of a hard refusal, when nothing clears the threshold.
+# ---------------------------------------------------------------------------
+
+def test_soft_mode_falls_back_to_general_knowledge_with_disclaimer():
+    pipeline = _pipeline_with_indexed_doc()
+
+    with patch("core.rag_pipeline.call_chat_completion") as mock_call:
+        mock_call.return_value = ("Communication is the exchange of information between parties.", 10.0, None)
+        resp = pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
+
+    assert resp.error is None
+    assert resp.refused is False
+    assert resp.grounded is False
+    assert resp.answer.startswith("This isn't directly covered in your uploaded materials, but generally speaking:")
+    assert "Communication is the exchange of information between parties." in resp.answer
+    assert mock_call.called  # unlike strict mode, the LLM IS consulted here
+
+
+def test_soft_mode_still_surfaces_closest_matches_for_transparency():
+    """Requirement: even in soft mode, show what was almost relevant."""
+    pipeline = _pipeline_with_indexed_doc()
+
+    with patch("core.rag_pipeline.call_chat_completion") as mock_call:
+        mock_call.return_value = ("some general answer", 10.0, None)
+        resp = pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
+
+    assert resp.sources  # the near-miss chunks are still returned
+    assert resp.grounded is False  # but explicitly flagged as not what grounded the answer
+
+
+def test_soft_mode_general_knowledge_prompt_does_not_include_retrieved_context():
+    """The general-knowledge fallback must not be fed the (irrelevant, below-
+    threshold) retrieved chunks as if they were real context -- that's the
+    whole point of not pretending this is grounded."""
+    pipeline = _pipeline_with_indexed_doc()
+
+    with patch("core.rag_pipeline.call_chat_completion") as mock_call:
+        mock_call.return_value = ("answer", 10.0, None)
+        pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
+
+    sent_messages = mock_call.call_args.args[2]
+    user_message = sent_messages[1]["content"]
+    assert "Web analytics is the measurement" not in user_message  # no leaked irrelevant context
+    assert "what is communication" in user_message.lower()
+
+
+def test_soft_mode_does_not_change_behavior_when_confidence_clears_threshold():
+    """Soft vs strict only matters when nothing clears the threshold -- a
+    genuine match should answer normally either way."""
+    pipeline = _pipeline_with_indexed_doc()
+
+    with patch("core.rag_pipeline.call_chat_completion") as mock_call:
+        mock_call.return_value = ("Web analytics tracks behavior.", 10.0, None)
+        resp = pipeline.generate_answer("What is web analytics?", min_score=0.35, strict_mode=False)
+
+    assert resp.grounded is True
+    assert resp.refused is False
+    assert not resp.answer.startswith("This isn't directly covered")
+
+
+def test_soft_mode_fallback_llm_failure_is_reported_as_error_not_general_knowledge():
+    pipeline = _pipeline_with_indexed_doc()
+
+    with patch("core.rag_pipeline.call_chat_completion") as mock_call:
+        mock_call.return_value = ("", 5.0, "rate_limit")
+        resp = pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
+
+    assert resp.error == "rate_limit"
+    assert resp.grounded is False
+    assert "rate limit" in resp.answer.lower()
