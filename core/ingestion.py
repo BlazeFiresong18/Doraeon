@@ -1,9 +1,20 @@
 """Extract text from academic PDFs into LlamaIndex Documents, one per page,
 carrying source metadata (filename, page number, subject, unit) that survives
-chunking into Nodes -- this is what source attribution reads back later."""
+chunking into Nodes -- this is what source attribution reads back later.
+
+Per-page quality checking, not whole-document fallback: a real PDF (confirmed
+against "Web Analytics Demystified") can have one font work fine on some
+pages and fail on others -- pdfplumber emitted literal "(cid:N)" glyph-ID
+placeholders on every page of that file, while pypdf produced raw control
+bytes on most pages but happened to decode a couple of pages correctly.
+Neither failure mode is "no text" (empty), so a whole-document
+succeeded/failed check never catches it -- each page is checked and each
+extractor tried independently instead.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import BytesIO
 from typing import BinaryIO
 
@@ -12,6 +23,15 @@ from llama_index.core import Document
 from pypdf import PdfReader
 
 from core.text_cleaner import clean_pdf_text
+
+
+@dataclass
+class PageExtractionIssue:
+    """A page that neither extractor could turn into readable text."""
+
+    filename: str
+    page_number: int
+    reason: str
 
 
 def _guess_subject_unit(filename: str) -> tuple[str, str]:
@@ -31,8 +51,29 @@ def _guess_subject_unit(filename: str) -> tuple[str, str]:
     return subject, unit
 
 
+def _looks_like_real_text(text: str, min_printable_ratio: float = 0.85) -> bool:
+    """Distinguishes genuinely-extracted language from two known PDF
+    extraction failure modes, both caused by a font with no proper
+    ToUnicode character mapping (confirmed against a real file):
+
+    - pdfplumber emits literal "(cid:N)" glyph-ID placeholders instead of
+      decoded characters.
+    - pypdf emits raw control-character bytes instead of text.
+
+    Neither is empty text, so a plain "did we get anything back" check
+    doesn't catch either. This checks whether what came back is actually
+    printable language, not just non-empty.
+    """
+    if not text or not text.strip():
+        return False
+    if "(cid:" in text:
+        return False
+    printable = sum(1 for c in text if c.isprintable() or c in "\n\r\t")
+    return (printable / len(text)) >= min_printable_ratio
+
+
 def _extract_with_pdfplumber(file_obj: BinaryIO) -> list[str]:
-    """Primary extractor (better layout preservation). Returns raw per-page text."""
+    """Returns raw per-page text (may include garbled/undecoded pages)."""
     pages: list[str] = []
     with pdfplumber.open(file_obj) as pdf:
         for page in pdf.pages:
@@ -41,7 +82,7 @@ def _extract_with_pdfplumber(file_obj: BinaryIO) -> list[str]:
 
 
 def _extract_with_pypdf(file_obj: BinaryIO) -> list[str]:
-    """Fallback extractor when pdfplumber fails."""
+    """Returns raw per-page text (may include garbled/undecoded pages)."""
     reader = PdfReader(file_obj)
     return [page.extract_text() or "" for page in reader.pages]
 
@@ -51,8 +92,9 @@ def load_pdf_documents(
     filename: str,
     subject: str = "",
     unit: str = "",
-) -> list[Document]:
-    """Load one PDF's bytes into a list of Documents, one per non-empty page."""
+) -> tuple[list[Document], list[PageExtractionIssue]]:
+    """Load one PDF's bytes into a list of Documents (one per readable page)
+    plus a list of pages that couldn't be read by either extractor."""
     guessed_subject, guessed_unit = _guess_subject_unit(filename)
     subj = subject or guessed_subject
     u = unit or guessed_unit
@@ -60,15 +102,43 @@ def load_pdf_documents(
     buffer = BytesIO(data)
     try:
         buffer.seek(0)
-        raw_pages = _extract_with_pdfplumber(buffer)
-        if not any(p.strip() for p in raw_pages):
-            raise ValueError("pdfplumber extracted no text")
+        plumber_pages = _extract_with_pdfplumber(buffer)
     except Exception:
-        buffer.seek(0)
-        raw_pages = _extract_with_pypdf(buffer)
+        plumber_pages = []
 
+    try:
+        buffer.seek(0)
+        pypdf_pages = _extract_with_pypdf(buffer)
+    except Exception:
+        pypdf_pages = []
+
+    n_pages = max(len(plumber_pages), len(pypdf_pages))
     documents: list[Document] = []
-    for i, raw_text in enumerate(raw_pages, start=1):
+    issues: list[PageExtractionIssue] = []
+
+    for i in range(n_pages):
+        plumber_text = plumber_pages[i] if i < len(plumber_pages) else ""
+        pypdf_text = pypdf_pages[i] if i < len(pypdf_pages) else ""
+
+        if _looks_like_real_text(plumber_text):
+            raw_text = plumber_text
+        elif _looks_like_real_text(pypdf_text):
+            raw_text = pypdf_text
+        elif not plumber_text.strip() and not pypdf_text.strip():
+            # Genuinely blank page (e.g. a separator page) -- not a failure,
+            # nothing to report, just nothing to index.
+            continue
+        else:
+            issues.append(
+                PageExtractionIssue(
+                    filename=filename,
+                    page_number=i + 1,
+                    reason="Neither extractor produced readable text (likely an unusual or "
+                    "embedded font without a proper character mapping) -- page skipped, not indexed as garbage.",
+                )
+            )
+            continue
+
         text = clean_pdf_text(raw_text)
         if not text.strip():
             continue
@@ -77,7 +147,7 @@ def load_pdf_documents(
                 text=text,
                 metadata={
                     "filename": filename,
-                    "page_number": i,
+                    "page_number": i + 1,
                     "subject": subj,
                     "unit": u,
                 },
@@ -86,22 +156,23 @@ def load_pdf_documents(
                 # metadata to the text before embedding by default, which
                 # would inject filename/page boilerplate into every chunk's
                 # vector and skew similarity scores in an uncontrolled way.
-                # Embed purely on the actual content, same as the prior
-                # implementation (which only ever embedded `chunk.text`).
                 excluded_llm_metadata_keys=[],
                 excluded_embed_metadata_keys=["filename", "page_number", "subject", "unit"],
             )
         )
-    return documents
+    return documents, issues
 
 
 def load_multiple_pdfs(
     files: list[tuple[bytes, str]],
     default_subject: str = "",
     default_unit: str = "",
-) -> list[Document]:
+) -> tuple[list[Document], list[PageExtractionIssue]]:
     """Load several uploaded PDFs; each item is (bytes, filename)."""
     all_documents: list[Document] = []
+    all_issues: list[PageExtractionIssue] = []
     for data, name in files:
-        all_documents.extend(load_pdf_documents(data, name, default_subject, default_unit))
-    return all_documents
+        docs, issues = load_pdf_documents(data, name, default_subject, default_unit)
+        all_documents.extend(docs)
+        all_issues.extend(issues)
+    return all_documents, all_issues

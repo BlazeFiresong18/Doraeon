@@ -72,7 +72,11 @@ def build_index(materials_dir: Path) -> DoraeonIndex:
         sys.exit(1)
 
     files = [(p.read_bytes(), p.name) for p in pdf_paths]
-    documents = load_multiple_pdfs(files)
+    documents, issues = load_multiple_pdfs(files)
+    if issues:
+        print(f"WARNING: {len(issues)} page(s) could not be read cleanly and were skipped:")
+        for issue in issues:
+            print(f"  - {issue.filename} p.{issue.page_number}: {issue.reason}")
 
     idx = DoraeonIndex()
     n_chunks = idx.add_documents(documents)

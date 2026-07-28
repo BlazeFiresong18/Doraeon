@@ -47,11 +47,17 @@ if "indexed_files" not in st.session_state:
     st.session_state.indexed_files: list[str] = []
 if "msg_counter" not in st.session_state:
     st.session_state.msg_counter = 0
+if "extraction_issues" not in st.session_state:
+    st.session_state.extraction_issues: list = []
 
 
 def build_index(uploaded_files: list, subject: str, unit: str, chunk_size: int, overlap: int) -> tuple[int, int]:
     file_data = [(f.getvalue(), f.name) for f in uploaded_files]
-    documents = load_multiple_pdfs(file_data, default_subject=subject, default_unit=unit)
+    documents, issues = load_multiple_pdfs(file_data, default_subject=subject, default_unit=unit)
+    # Surfaced regardless of whether any documents came back -- a PDF that
+    # fails on every page should be visible, not silently produce "0 chunks"
+    # with no explanation.
+    st.session_state.extraction_issues.extend(issues)
     if not documents:
         return 0, 0
 
@@ -169,14 +175,26 @@ with st.sidebar:
     with st.expander("📤 Upload PDFs", expanded=st.session_state.doraeon_index.node_count == 0):
         uploaded = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
         if uploaded and st.button("Build index", type="primary", use_container_width=True):
+            issues_before = len(st.session_state.extraction_issues)
             with st.spinner("Indexing…"):
                 n_docs, n_chunks = build_index(
                     uploaded, (default_subject or "").strip(), (default_unit or "").strip(), chunk_size, overlap
                 )
+            new_issues = st.session_state.extraction_issues[issues_before:]
             if n_chunks:
                 st.success(f"✓ {n_docs} pages → {n_chunks} chunks")
             else:
                 st.warning("No text extracted.")
+            if new_issues:
+                st.warning(
+                    f"⚠️ {len(new_issues)} page(s) could not be read cleanly (unusual/embedded "
+                    "font) and were skipped rather than indexed as garbage — see below."
+                )
+
+    if st.session_state.extraction_issues:
+        with st.expander(f"⚠️ {len(st.session_state.extraction_issues)} unreadable page(s)", expanded=False):
+            for issue in st.session_state.extraction_issues:
+                st.caption(f"📄 {issue.filename}, page {issue.page_number}: {issue.reason}")
 
     st.caption(f"📎 {st.session_state.doraeon_index.node_count} chunks indexed")
 
@@ -199,6 +217,7 @@ with st.sidebar:
             st.session_state.doraeon_index.clear()
             st.session_state.chat_history = []
             st.session_state.indexed_files = []
+            st.session_state.extraction_issues = []
             st.rerun()
 
     if not api_ok:
