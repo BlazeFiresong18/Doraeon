@@ -4,23 +4,11 @@ Evaluation harness for Doraeon: retrieval precision@k + LLM-graded answer accura
 Usage:
     python eval/run_eval.py --materials-dir eval/materials --eval-set eval/eval_set.json
 
-Builds a fresh in-memory index from the PDFs in --materials-dir using the exact
-same pdf_loader/chunker/embeddings/vector_store/rag_pipeline code the app uses
-(nothing reimplemented here), runs every labeled question through the real
-RAGPipeline (guardrail included), and reports:
-
-  - precision@k: did a retrieved chunk actually match the expected
-    (filename, page) for that question, within a small page tolerance to
-    absorb chunk-boundary slop?
-  - accuracy: an LLM-as-judge verdict (correct/partial/incorrect) comparing
-    the generated answer to your labeled expected_answer. Questions the
-    hallucination guardrail refused are reported separately as "refused",
-    not graded as wrong -- a refusal on a question that DOES have a real
-    answer in your materials is itself a useful signal that the confidence
-    threshold may be set too high.
-
-Requires OPENAI_API_KEY in .env for the accuracy/judge parts. Precision@k
-still runs without it (retrieval doesn't need the LLM).
+Builds a fresh index from the PDFs in --materials-dir using the exact same
+ingestion/index_store/rag_pipeline code the app uses (nothing reimplemented
+here), runs every labeled question through the real RAGPipeline (guardrail
+included), and reports precision@k, LLM-graded accuracy, and guardrail
+refusals as a distinct category (see eval/README.md for details).
 """
 
 from __future__ import annotations
@@ -30,19 +18,19 @@ import csv
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openai import OpenAI  # noqa: E402
 
-from utils.chunker import chunk_pages  # noqa: E402
-from utils.config import get_openai_api_key, get_openai_model, load_settings  # noqa: E402
-from utils.embeddings import EmbeddingModel  # noqa: E402
-from utils.pdf_loader import load_multiple_pdfs  # noqa: E402
-from utils.rag_pipeline import RAGPipeline  # noqa: E402
-from utils.vector_store import FaissVectorStore  # noqa: E402
+from core.config import get_openai_api_key, get_openai_model, load_settings  # noqa: E402
+from core.ingestion import load_multiple_pdfs  # noqa: E402
+from core.index_store import DoraeonIndex  # noqa: E402
+from core.llm_client import call_chat_completion  # noqa: E402
+from core.rag_pipeline import RAGPipeline  # noqa: E402
+from core.retrieval import retrieve  # noqa: E402
 
 JUDGE_PROMPT = """You are grading a student-facing academic answer for correctness.
 
@@ -77,28 +65,27 @@ class EvalResult:
     generation_ms: float = 0.0
 
 
-def build_index(materials_dir: Path) -> tuple[FaissVectorStore, EmbeddingModel]:
+def build_index(materials_dir: Path) -> DoraeonIndex:
     pdf_paths = sorted(materials_dir.glob("*.pdf"))
     if not pdf_paths:
         print(f"No PDFs found in {materials_dir} -- nothing to index.")
         sys.exit(1)
 
     files = [(p.read_bytes(), p.name) for p in pdf_paths]
-    pages = load_multiple_pdfs(files)
-    chunks = chunk_pages(pages)
+    documents, issues = load_multiple_pdfs(files)
+    if issues:
+        print(f"WARNING: {len(issues)} page(s) could not be read cleanly and were skipped:")
+        for issue in issues:
+            print(f"  - {issue.filename} p.{issue.page_number}: {issue.reason}")
 
-    embedder = EmbeddingModel()
-    embeddings = embedder.embed_texts([c.text for c in chunks])
-
-    store = FaissVectorStore()
-    store.add(embeddings, chunks)
-    print(f"Indexed {len(pdf_paths)} PDF(s) -> {len(pages)} pages -> {len(chunks)} chunks.")
-    return store, embedder
+    idx = DoraeonIndex()
+    n_chunks = idx.add_documents(documents)
+    print(f"Indexed {len(pdf_paths)} PDF(s) -> {len(documents)} pages -> {n_chunks} chunks.")
+    return idx
 
 
 def precision_at_k(sources, expected_filename: str, expected_page: int, page_tolerance: int = 1) -> bool:
-    for r in sources:
-        c = r.chunk
+    for c in sources:
         if c.filename == expected_filename and abs(c.page_number - expected_page) <= page_tolerance:
             return True
     return False
@@ -106,15 +93,9 @@ def precision_at_k(sources, expected_filename: str, expected_page: int, page_tol
 
 def grade_with_llm(client: OpenAI, model: str, question: str, expected: str, generated: str) -> tuple[str, str]:
     prompt = JUDGE_PROMPT.format(question=question, expected=expected, generated=generated)
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-        )
-        text = completion.choices[0].message.content or ""
-    except Exception as e:  # noqa: BLE001 -- a judge-call failure shouldn't crash the whole eval run
-        return "ungraded", f"LLM judge call failed: {e}"
+    text, _ms, err = call_chat_completion(client, model, [{"role": "user", "content": prompt}], temperature=0.0)
+    if err:
+        return "ungraded", f"LLM judge call failed: {err}"
 
     verdict_match = re.search(r"VERDICT:\s*(correct|partial|incorrect)", text, re.IGNORECASE)
     reason_match = re.search(r"REASON:\s*(.+)", text, re.IGNORECASE)
@@ -125,8 +106,8 @@ def grade_with_llm(client: OpenAI, model: str, question: str, expected: str, gen
 
 def run(materials_dir: Path, eval_set_path: Path, top_k: int, page_tolerance: int) -> list[EvalResult]:
     load_settings()
-    store, embedder = build_index(materials_dir)
-    pipeline = RAGPipeline(store, embedder)
+    idx = build_index(materials_dir)
+    pipeline = RAGPipeline(idx)
 
     eval_items = json.loads(eval_set_path.read_text(encoding="utf-8"))
     api_key = get_openai_api_key()
@@ -152,25 +133,24 @@ def run(materials_dir: Path, eval_set_path: Path, top_k: int, page_tolerance: in
             continue
 
         if not api_key:
-            retrieved, retrieval_ms = pipeline.retrieve(question, top_k=top_k)
+            retrieved = retrieve(idx, question, top_k=top_k)
             results.append(
                 EvalResult(
                     id=item.get("id", ""),
                     question=question,
                     expected_source=expected_source,
-                    retrieved_sources="; ".join(f"{r.chunk.filename} p.{r.chunk.page_number}" for r in retrieved),
+                    retrieved_sources="; ".join(f"{c.filename} p.{c.page_number}" for c in retrieved),
                     precision_hit=precision_at_k(retrieved, expected_filename, expected_page, page_tolerance),
-                    top_score=retrieved[0].score if retrieved else 0.0,
+                    top_score=retrieved[0].confidence if retrieved else 0.0,
                     generated_answer="(skipped -- no API key)",
                     verdict="ungraded",
-                    retrieval_ms=retrieval_ms,
                 )
             )
             continue
 
         resp = pipeline.generate_answer(question, top_k=top_k)
         precision_hit = precision_at_k(resp.sources, expected_filename, expected_page, page_tolerance)
-        top_score = resp.sources[0].score if resp.sources else 0.0
+        top_score = resp.sources[0].confidence if resp.sources else 0.0
 
         if resp.error == "below_confidence_threshold":
             verdict, reason = "refused", "Guardrail refused to answer (below confidence threshold)."
@@ -182,7 +162,7 @@ def run(materials_dir: Path, eval_set_path: Path, top_k: int, page_tolerance: in
                 id=item.get("id", ""),
                 question=question,
                 expected_source=expected_source,
-                retrieved_sources="; ".join(f"{r.chunk.filename} p.{r.chunk.page_number}" for r in resp.sources),
+                retrieved_sources="; ".join(f"{c.filename} p.{c.page_number}" for c in resp.sources),
                 precision_hit=precision_hit,
                 top_score=top_score,
                 generated_answer=resp.answer,

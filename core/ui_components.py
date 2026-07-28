@@ -7,8 +7,8 @@ from collections import Counter
 
 import streamlit as st
 
-from utils.text_cleaner import preview_snippet
-from utils.vector_store import SearchResult
+from core.retrieval import ScoredChunk
+from core.text_cleaner import preview_snippet
 
 # Categorical palette (dark-mode steps), fixed order -- never reassigned per
 # render, never cycled past the validated set. Beyond this many series the
@@ -298,12 +298,16 @@ def render_stat_tiles(document_count: int, chunk_count: int, subject_count: int)
     st.markdown(f'<div class="stat-row">{cells}</div>', unsafe_allow_html=True)
 
 
-def render_subject_distribution(chunks: list) -> None:
+def render_subject_distribution(subjects: list[str]) -> None:
     """Part-to-whole breakdown of indexed chunks by subject: a horizontal
     stacked bar with a legend, per the dataviz skill's part-to-whole guidance.
     Skipped entirely when there's only one subject (or none) -- a single-series
-    bar has nothing to compare and a legend for one color restates the title."""
-    subjects = [c.subject.strip() for c in chunks if c.subject and c.subject.strip()]
+    bar has nothing to compare and a legend for one color restates the title.
+
+    Takes raw subject strings (one per chunk, blanks allowed) rather than
+    chunk-like objects -- that's all this ever needed, and it avoids callers
+    having to construct throwaway chunk objects just to satisfy a type."""
+    subjects = [s.strip() for s in subjects if s and s.strip()]
     if len(set(subjects)) < 2:
         return
 
@@ -348,8 +352,8 @@ def render_subject_distribution(chunks: list) -> None:
     )
 
 
-def score_label(score: float) -> str:
-    pct = int(max(0, min(100, score * 100)))
+def score_label(confidence: float) -> str:
+    pct = int(max(0, min(100, confidence * 100)))
     if pct >= 75:
         return "High"
     if pct >= 50:
@@ -357,21 +361,20 @@ def score_label(score: float) -> str:
     return "Low"
 
 
-def _section_label(chunk) -> str:
+def _section_label(chunk: ScoredChunk) -> str:
     """Subject/unit suffix for a citation, e.g. ' · CS101 · Unit 2' -- omits
     parts that weren't detected rather than showing empty placeholders."""
     parts = [p for p in (chunk.subject, chunk.unit) if p]
     return f" · {' · '.join(html.escape(p) for p in parts)}" if parts else ""
 
 
-def render_citation_pills(sources: list[SearchResult]) -> None:
+def render_citation_pills(sources: list[ScoredChunk]) -> None:
     if not sources:
         return
     pills = []
-    for r in sources:
-        c = r.chunk
+    for c in sources:
         label = f"📄 {html.escape(c.filename)} — Page {c.page_number}{_section_label(c)}"
-        badge = f'<span class="score-badge">{score_label(r.score)} {r.score:.0%}</span>'
+        badge = f'<span class="score-badge">{score_label(c.confidence)} {c.confidence:.0%}</span>'
         pills.append(f'<span class="cite-pill">{label}{badge}</span>')
     st.markdown(
         f'<div class="citation-row">{"".join(pills)}</div>',
@@ -404,16 +407,15 @@ def render_meta_strip(
 
 
 def render_source_expander(
-    sources: list[SearchResult],
+    sources: list[ScoredChunk],
     expander_key: str,
 ) -> None:
     if not sources:
         return
     with st.expander(f"📑 View retrieved context ({len(sources)})", expanded=False):
-        for i, r in enumerate(sources, start=1):
-            c = r.chunk
+        for i, c in enumerate(sources, start=1):
             preview = preview_snippet(c.text)
-            title = f"Source {i} · 📄 {c.filename} · p.{c.page_number}{_section_label(c)} · {r.score:.0%}"
+            title = f"Source {i} · 📄 {c.filename} · p.{c.page_number}{_section_label(c)} · {c.confidence:.0%}"
             with st.expander(title, expanded=False):
                 st.markdown(
                     f'<p class="chunk-preview">{html.escape(preview)}</p>',

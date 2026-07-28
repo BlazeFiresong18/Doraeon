@@ -7,10 +7,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Project root (parent of utils/)
+# Project root (parent of core/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
+
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
 
 _loaded = False
 
@@ -40,11 +43,9 @@ def get_openai_model() -> str:
 
 def get_min_retrieval_score(default: float = 0.35) -> float:
     """
-    Hallucination guardrail threshold: minimum cosine similarity (0-1) the
-    single best-retrieved chunk must reach before the LLM is asked to answer
-    at all. Below this, the app refuses rather than letting the model
-    rationalize an answer from a weak match. Empirical/content-dependent --
-    tune via MIN_RETRIEVAL_SCORE in .env, or live via the sidebar slider.
+    Hallucination guardrail threshold, on the SAME normalized 0-1 scale as the
+    displayed confidence percentage (i.e. 0.35 means "35%"). See
+    core/retrieval.py for the normalization formula this is compared against.
     """
     load_settings()
     raw = os.getenv("MIN_RETRIEVAL_SCORE")
