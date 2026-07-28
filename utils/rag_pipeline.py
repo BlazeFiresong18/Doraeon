@@ -18,6 +18,34 @@ If the answer is not present in the context, say clearly: "I do not know based o
 Cite sources by filename and page when possible.
 Be concise, accurate, and student-friendly. Use clear paragraphs and bullet points when helpful."""
 
+# Condenses a history-dependent follow-up ("explain the gist of it", "tell me
+# more") into a standalone question before it ever reaches retrieval. Without
+# this, a vague follow-up is embedded and searched literally as-is -- it has
+# no antecedent for "it", so it can't retrieve well regardless of whether the
+# underlying content exists, and the confidence guardrail then (correctly)
+# refuses a genuinely underspecified query. This is the fix for that: give
+# retrieval a real query to work with, not the guardrail a lower bar to clear.
+CONDENSE_PROMPT_TEMPLATE = """Given the conversation history and a follow-up message, rewrite the \
+follow-up as a standalone question that includes whatever context (topic, subject, or entity \
+referred to by "it"/"this"/"that"/"the topic") is needed to understand it without the history. \
+If the follow-up is already self-contained, return it unchanged. Respond with ONLY the rewritten \
+question and nothing else -- no preamble, no quotes.
+
+### Conversation history
+{history}
+
+### Follow-up message
+{question}
+
+### Standalone question
+"""
+
+# How many prior turns to include when condensing a follow-up. Bounds prompt
+# size/cost; recent turns are what pronouns like "it"/"that" almost always
+# refer back to.
+MAX_HISTORY_TURNS_FOR_CONDENSING = 3
+_HISTORY_ANSWER_TRUNCATE_CHARS = 300
+
 USER_PROMPT_TEMPLATE = """Answer ONLY using the provided academic context. If the answer is not present, say you do not know.
 
 ### Academic context
@@ -41,6 +69,31 @@ class RAGResponse:
     retrieval_ms: float = 0.0
     generation_ms: float = 0.0
     api_configured: bool = True
+    # Set only when a follow-up was condensed into a standalone question and
+    # the rewrite actually changed it -- lets the UI show what was actually
+    # searched for, so query rewriting is visible/debuggable, not a black box.
+    rewritten_question: str | None = None
+
+
+# A prior turn, for condensing follow-ups: (user_question, assistant_answer_text).
+HistoryTurn = tuple[str, str]
+
+
+def extract_history_turns(messages: list[dict], max_turns: int = MAX_HISTORY_TURNS_FOR_CONDENSING) -> list[HistoryTurn]:
+    """Pair up a flat chat_history-shaped list ([{"role":..., "content":...}, ...])
+    into (question, answer) turns, most-recent-last, capped to max_turns.
+
+    A pure function (no Streamlit dependency) so it's testable in isolation --
+    app.py is a script with top-level Streamlit calls that execute on import,
+    so logic that needs testing lives here instead, with app.py as a thin
+    wrapper around st.session_state.chat_history.
+    """
+    pairs = [
+        (messages[i]["content"], messages[i + 1]["content"])
+        for i in range(0, len(messages) - 1, 2)
+        if messages[i]["role"] == "user" and messages[i + 1]["role"] == "assistant"
+    ]
+    return pairs[-max_turns:] if max_turns else pairs
 
 
 class RAGPipeline:
@@ -56,6 +109,27 @@ class RAGPipeline:
         api_key = get_openai_api_key()
         self.api_configured = bool(api_key)
         self.client = OpenAI(api_key=api_key) if api_key else None
+
+    def _rewrite_standalone_question(self, question: str, history: list[HistoryTurn]) -> str:
+        """Condense `question` + recent `history` into a standalone question
+        for retrieval/generation. Returns `question` unchanged (no LLM call,
+        no cost) when there's no history to draw on -- the common case for a
+        first message. On any LLM failure, falls back to the original
+        question rather than blocking the turn on a rewrite error."""
+        if not history:
+            return question
+        if not self.client:
+            return question
+
+        recent = history[-MAX_HISTORY_TURNS_FOR_CONDENSING:]
+        history_text = "\n".join(
+            f"User: {q}\nAssistant: {a[:_HISTORY_ANSWER_TRUNCATE_CHARS]}" for q, a in recent
+        )
+        prompt = CONDENSE_PROMPT_TEMPLATE.format(history=history_text, question=question)
+        rewritten, _ms, err = self._call_openai(prompt)
+        if err or not rewritten.strip():
+            return question
+        return rewritten.strip()
 
     def _format_context(self, results: list[SearchResult]) -> str:
         blocks = []
@@ -143,8 +217,12 @@ class RAGPipeline:
         subject_filter: str | None = None,
         unit_filter: str | None = None,
         min_score: float | None = None,
+        history: list[HistoryTurn] | None = None,
     ) -> RAGResponse:
-        results, retrieval_ms = self.retrieve(question, top_k, subject_filter, unit_filter)
+        search_question = self._rewrite_standalone_question(question, history or [])
+        rewritten = search_question if search_question != question else None
+
+        results, retrieval_ms = self.retrieve(search_question, top_k, subject_filter, unit_filter)
 
         if not results:
             return RAGResponse(
@@ -152,12 +230,16 @@ class RAGPipeline:
                 sources=[],
                 retrieval_ms=retrieval_ms,
                 api_configured=self.api_configured,
+                rewritten_question=rewritten,
             )
 
         # Hallucination guardrail: if even the single best-matching chunk falls
         # below the confidence threshold, refuse rather than let the LLM
         # rationalize an answer from weak context. Still surface what WAS
         # found, so the refusal is transparent rather than a black box.
+        # Runs against search_question (post-rewrite) -- a condensed, specific
+        # query is what should clear this bar, not the raw "explain the gist
+        # of it" fragment, which has nothing for the embedding to latch onto.
         threshold = get_min_retrieval_score() if min_score is None else min_score
         if results[0].score < threshold:
             return RAGResponse(
@@ -166,10 +248,11 @@ class RAGPipeline:
                 error="below_confidence_threshold",
                 retrieval_ms=retrieval_ms,
                 api_configured=self.api_configured,
+                rewritten_question=rewritten,
             )
 
         context = self._format_context(results)
-        user_message = USER_PROMPT_TEMPLATE.format(context=context, question=question)
+        user_message = USER_PROMPT_TEMPLATE.format(context=context, question=search_question)
 
         answer, generation_ms, err = self._call_openai(user_message)
 
@@ -181,6 +264,7 @@ class RAGPipeline:
                 retrieval_ms=retrieval_ms,
                 generation_ms=generation_ms,
                 api_configured=self.api_configured,
+                rewritten_question=rewritten,
             )
 
         return RAGResponse(
@@ -189,6 +273,7 @@ class RAGPipeline:
             retrieval_ms=retrieval_ms,
             generation_ms=generation_ms,
             api_configured=True,
+            rewritten_question=rewritten,
         )
 
     def summarize_topic(self, topic: str, top_k: int = 8, min_score: float | None = None) -> RAGResponse:

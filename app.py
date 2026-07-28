@@ -11,7 +11,7 @@ from utils.chunker import TextChunk, chunk_pages
 from utils.config import env_setup_hint, get_min_retrieval_score, get_openai_api_key, load_settings
 from utils.embeddings import EmbeddingModel
 from utils.pdf_loader import load_multiple_pdfs
-from utils.rag_pipeline import RAGPipeline, RAGResponse
+from utils.rag_pipeline import RAGPipeline, RAGResponse, extract_history_turns
 from utils.ui_components import (
     inject_global_css,
     render_answer_card,
@@ -108,6 +108,7 @@ def append_turn(user_text: str, resp: RAGResponse) -> None:
             "retrieval_ms": resp.retrieval_ms,
             "generation_ms": resp.generation_ms,
             "error": resp.error,
+            "rewritten_question": resp.rewritten_question,
             "msg_id": st.session_state.msg_counter,
         }
     )
@@ -118,13 +119,24 @@ def run_rag(
 ) -> RAGResponse:
     pipeline = RAGPipeline(st.session_state.vector_store, st.session_state.embedder)
     return pipeline.generate_answer(
-        question, top_k=top_k, subject_filter=subj, unit_filter=unit, min_score=min_score
+        question,
+        top_k=top_k,
+        subject_filter=subj,
+        unit_filter=unit,
+        min_score=min_score,
+        # Only complete turns already in chat_history at call time -- the
+        # in-flight question is appended separately afterward via append_turn,
+        # so it's never included here.
+        history=extract_history_turns(st.session_state.chat_history),
     )
 
 
 def render_assistant_message(msg: dict) -> None:
     msg_id = msg.get("msg_id", 0)
     sources = msg.get("sources") or []
+
+    if msg.get("rewritten_question"):
+        st.caption(f"🔎 Searched for: _{msg['rewritten_question']}_")
 
     if msg.get("error") == "missing_api_key":
         st.info(msg["content"])
