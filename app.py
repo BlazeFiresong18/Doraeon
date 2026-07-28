@@ -1,18 +1,19 @@
 """
 Doraeon — AI-powered academic RAG assistant.
-Polished Streamlit frontend with answer-centric layout.
+Streamlit frontend built on LlamaIndex + FAISS + OpenAI (see core/).
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from utils.chunker import TextChunk, chunk_pages
-from utils.config import env_setup_hint, get_min_retrieval_score, get_openai_api_key, load_settings
-from utils.embeddings import EmbeddingModel
-from utils.pdf_loader import load_multiple_pdfs
-from utils.rag_pipeline import RAGPipeline, RAGResponse, extract_history_turns
-from utils.ui_components import (
+from core.config import env_setup_hint, get_min_retrieval_score, get_openai_api_key, load_settings
+from core.index_store import DoraeonIndex
+from core.ingestion import load_multiple_pdfs
+from core.query_rewriting import extract_history_turns
+from core.rag_pipeline import RAGPipeline, RAGResponse
+from core.study_tools import generate_flashcards, predict_exam_questions, summarize_topic
+from core.ui_components import (
     inject_global_css,
     render_answer_card,
     render_api_setup_banner,
@@ -25,7 +26,6 @@ from utils.ui_components import (
     render_stat_tiles,
     render_subject_distribution,
 )
-from utils.vector_store import FaissVectorStore
 
 load_settings()
 
@@ -39,12 +39,8 @@ st.set_page_config(
 inject_global_css()
 
 # --- Session state ---
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = FaissVectorStore()
-if "embedder" not in st.session_state:
-    st.session_state.embedder = EmbeddingModel()
-if "chunks" not in st.session_state:
-    st.session_state.chunks: list[TextChunk] = []
+if "doraeon_index" not in st.session_state:
+    st.session_state.doraeon_index = DoraeonIndex()
 if "chat_history" not in st.session_state:
     st.session_state.chat_history: list[dict] = []
 if "indexed_files" not in st.session_state:
@@ -53,27 +49,16 @@ if "msg_counter" not in st.session_state:
     st.session_state.msg_counter = 0
 
 
-def build_index(
-    uploaded_files: list,
-    subject: str,
-    unit: str,
-    chunk_size: int,
-    overlap: int,
-) -> tuple[int, int]:
+def build_index(uploaded_files: list, subject: str, unit: str, chunk_size: int, overlap: int) -> tuple[int, int]:
     file_data = [(f.getvalue(), f.name) for f in uploaded_files]
-    pages = load_multiple_pdfs(file_data, default_subject=subject, default_unit=unit)
-    if not pages:
+    documents = load_multiple_pdfs(file_data, default_subject=subject, default_unit=unit)
+    if not documents:
         return 0, 0
 
-    chunks = chunk_pages(pages, chunk_size=chunk_size, overlap=overlap)
-    texts = [c.text for c in chunks]
-    embeddings = st.session_state.embedder.embed_texts(texts)
-
-    store: FaissVectorStore = st.session_state.vector_store
-    store.add(embeddings, chunks)
-    st.session_state.chunks.extend(chunks)
+    index: DoraeonIndex = st.session_state.doraeon_index
+    n_chunks = index.add_documents(documents, chunk_size=chunk_size, chunk_overlap=overlap)
     st.session_state.indexed_files.extend([f.name for f in uploaded_files])
-    return len(pages), len(chunks)
+    return len(documents), n_chunks
 
 
 def export_chat_markdown() -> str:
@@ -89,10 +74,9 @@ def export_chat_markdown() -> str:
             if sources:
                 lines.append("")
                 lines.append("**Sources:**")
-                for r in sources:
-                    c = r.chunk
+                for c in sources:
                     section = f" ({c.unit})" if c.unit else ""
-                    lines.append(f"- {c.filename}, p.{c.page_number}{section} — {r.score:.0%} match")
+                    lines.append(f"- {c.filename}, p.{c.page_number}{section} — {c.confidence:.0%} match")
         lines.append("")
     return "\n".join(lines)
 
@@ -114,10 +98,8 @@ def append_turn(user_text: str, resp: RAGResponse) -> None:
     )
 
 
-def run_rag(
-    question: str, top_k: int, subj: str | None, unit: str | None, min_score: float
-) -> RAGResponse:
-    pipeline = RAGPipeline(st.session_state.vector_store, st.session_state.embedder)
+def run_rag(question: str, top_k: int, subj: str | None, unit: str | None, min_score: float) -> RAGResponse:
+    pipeline = RAGPipeline(st.session_state.doraeon_index)
     return pipeline.generate_answer(
         question,
         top_k=top_k,
@@ -125,8 +107,7 @@ def run_rag(
         unit_filter=unit,
         min_score=min_score,
         # Only complete turns already in chat_history at call time -- the
-        # in-flight question is appended separately afterward via append_turn,
-        # so it's never included here.
+        # in-flight question is appended separately afterward via append_turn.
         history=extract_history_turns(st.session_state.chat_history),
     )
 
@@ -153,15 +134,11 @@ def render_assistant_message(msg: dict) -> None:
         )
         st.markdown(label)
         render_citation_pills(sources)
-        render_meta_strip(
-            len(sources),
-            retrieval_ms=msg.get("retrieval_ms"),
-            generation_ms=msg.get("generation_ms"),
-        )
+        render_meta_strip(len(sources), retrieval_ms=msg.get("retrieval_ms"), generation_ms=msg.get("generation_ms"))
         render_source_expander(sources, expander_key=f"msg_{msg_id}")
 
 
-# --- Sidebar (compact) ---
+# --- Sidebar ---
 with st.sidebar:
     st.markdown("### 📚 Doraeon")
     api_ok = bool(get_openai_api_key())
@@ -189,28 +166,19 @@ with st.sidebar:
         filter_subject = st.text_input("Filter subject", placeholder="All")
         filter_unit = st.text_input("Filter unit", placeholder="All")
 
-    with st.expander("📤 Upload PDFs", expanded=st.session_state.vector_store.size == 0):
-        uploaded = st.file_uploader(
-            "PDFs",
-            type=["pdf"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-        )
+    with st.expander("📤 Upload PDFs", expanded=st.session_state.doraeon_index.node_count == 0):
+        uploaded = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
         if uploaded and st.button("Build index", type="primary", use_container_width=True):
             with st.spinner("Indexing…"):
-                n_pages, n_chunks = build_index(
-                    uploaded,
-                    (default_subject or "").strip(),
-                    (default_unit or "").strip(),
-                    chunk_size,
-                    overlap,
+                n_docs, n_chunks = build_index(
+                    uploaded, (default_subject or "").strip(), (default_unit or "").strip(), chunk_size, overlap
                 )
             if n_chunks:
-                st.success(f"✓ {n_pages} pages → {n_chunks} chunks")
+                st.success(f"✓ {n_docs} pages → {n_chunks} chunks")
             else:
                 st.warning("No text extracted.")
 
-    st.caption(f"📎 {st.session_state.vector_store.size} chunks indexed")
+    st.caption(f"📎 {st.session_state.doraeon_index.node_count} chunks indexed")
 
     if st.session_state.chat_history:
         st.download_button(
@@ -228,8 +196,7 @@ with st.sidebar:
             st.rerun()
     with col_clear_all:
         if st.button("Clear all", use_container_width=True):
-            st.session_state.vector_store.clear()
-            st.session_state.chunks = []
+            st.session_state.doraeon_index.clear()
             st.session_state.chat_history = []
             st.session_state.indexed_files = []
             st.rerun()
@@ -241,12 +208,13 @@ with st.sidebar:
 # --- Main ---
 render_hero()
 
-if st.session_state.vector_store.size > 0:
-    chunks: list[TextChunk] = st.session_state.chunks
+if st.session_state.doraeon_index.node_count > 0:
+    nodes = st.session_state.doraeon_index.nodes
+    chunks_meta = [n.metadata for n in nodes]
     document_count = len(set(st.session_state.indexed_files))
-    subject_count = len({c.subject.strip() for c in chunks if c.subject and c.subject.strip()})
-    render_stat_tiles(document_count, st.session_state.vector_store.size, subject_count)
-    render_subject_distribution(chunks)
+    subject_count = len({m.get("subject", "").strip() for m in chunks_meta if m.get("subject", "").strip()})
+    render_stat_tiles(document_count, st.session_state.doraeon_index.node_count, subject_count)
+    render_subject_distribution([m.get("subject", "") for m in chunks_meta])
 
 if not get_openai_api_key():
     render_api_setup_banner(env_setup_hint())
@@ -257,34 +225,44 @@ unit_filter = (filter_unit or "").strip() or None
 tab_chat, tab_tools = st.tabs(["💬 Chat", "📝 Study tools"])
 
 with tab_tools:
-    st.markdown("##### Summarize or create flashcards from your index")
+    st.markdown("##### Summarize, create flashcards, or predict exam questions from your index")
     topic_input = st.text_input("Topic", placeholder="e.g. Binary Search Trees", key="tool_topic")
-    c1, c2, c3 = st.columns([1, 1, 1])
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
     with c1:
         n_cards = st.number_input("Cards", 3, 15, 5)
     with c2:
         if st.button("📋 Summarize", use_container_width=True) and topic_input:
-            if st.session_state.vector_store.size == 0:
+            if st.session_state.doraeon_index.node_count == 0:
                 st.warning("Build an index first.")
             else:
                 with st.spinner("Summarizing…"):
-                    p = RAGPipeline(st.session_state.vector_store, st.session_state.embedder)
-                    resp = p.summarize_topic(topic_input, top_k=top_k, min_score=min_score)
+                    p = RAGPipeline(st.session_state.doraeon_index)
+                    resp = summarize_topic(p, topic_input, top_k=top_k, min_score=min_score)
                 append_turn(f"Summarize: {topic_input}", resp)
                 st.rerun()
     with c3:
         if st.button("🃏 Flashcards", use_container_width=True) and topic_input:
-            if st.session_state.vector_store.size == 0:
+            if st.session_state.doraeon_index.node_count == 0:
                 st.warning("Build an index first.")
             else:
                 with st.spinner("Creating flashcards…"):
-                    p = RAGPipeline(st.session_state.vector_store, st.session_state.embedder)
-                    resp = p.generate_flashcards(topic_input, int(n_cards), top_k=top_k, min_score=min_score)
+                    p = RAGPipeline(st.session_state.doraeon_index)
+                    resp = generate_flashcards(p, topic_input, int(n_cards), top_k=top_k, min_score=min_score)
                 append_turn(f"Flashcards: {topic_input}", resp)
+                st.rerun()
+    with c4:
+        if st.button("🎯 Predict exam Qs", use_container_width=True) and topic_input:
+            if st.session_state.doraeon_index.node_count == 0:
+                st.warning("Build an index first.")
+            else:
+                with st.spinner("Predicting exam questions…"):
+                    p = RAGPipeline(st.session_state.doraeon_index)
+                    resp = predict_exam_questions(p, topic_input, int(n_cards), top_k=top_k, min_score=min_score)
+                append_turn(f"Predict exam questions: {topic_input}", resp)
                 st.rerun()
 
 with tab_chat:
-    if st.session_state.vector_store.size == 0:
+    if st.session_state.doraeon_index.node_count == 0:
         render_empty_upload_state()
     elif not st.session_state.chat_history:
         render_empty_chat_state()
@@ -298,7 +276,6 @@ with tab_chat:
                 else:
                     render_assistant_message(msg)
 
-    # Auto-scroll anchor for latest message
     if st.session_state.chat_history:
         st.markdown(
             '<div id="doraeon-chat-end"></div>'
@@ -309,7 +286,7 @@ with tab_chat:
     question = st.chat_input("Ask about your course materials…")
 
     if question:
-        if st.session_state.vector_store.size == 0:
+        if st.session_state.doraeon_index.node_count == 0:
             st.warning("Upload PDFs and build your index in the sidebar first.")
         else:
             with st.status("Thinking…", expanded=False) as status:

@@ -1,4 +1,4 @@
-from utils.text_cleaner import clean_pdf_text, preview_snippet
+from core.text_cleaner import clean_pdf_text, preview_snippet
 
 
 def test_fixes_hyphenation_across_linebreak():

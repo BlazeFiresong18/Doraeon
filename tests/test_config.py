@@ -1,4 +1,4 @@
-import utils.config as config
+import core.config as config
 
 
 def test_default_min_retrieval_score_when_unset(monkeypatch):
