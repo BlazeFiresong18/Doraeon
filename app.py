@@ -22,6 +22,8 @@ from utils.ui_components import (
     render_hero,
     render_meta_strip,
     render_source_expander,
+    render_stat_tiles,
+    render_subject_distribution,
 )
 from utils.vector_store import FaissVectorStore
 
@@ -72,6 +74,27 @@ def build_index(
     st.session_state.chunks.extend(chunks)
     st.session_state.indexed_files.extend([f.name for f in uploaded_files])
     return len(pages), len(chunks)
+
+
+def export_chat_markdown() -> str:
+    """Render the conversation (questions, answers, citations) as Markdown --
+    useful as study notes, independent of the app."""
+    lines = ["# Doraeon study session", ""]
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            lines.append(f"## Q: {msg['content']}")
+        else:
+            lines.append(msg["content"])
+            sources = msg.get("sources") or []
+            if sources:
+                lines.append("")
+                lines.append("**Sources:**")
+                for r in sources:
+                    c = r.chunk
+                    section = f" ({c.unit})" if c.unit else ""
+                    lines.append(f"- {c.filename}, p.{c.page_number}{section} — {r.score:.0%} match")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def append_turn(user_text: str, resp: RAGResponse) -> None:
@@ -175,14 +198,29 @@ with st.sidebar:
             else:
                 st.warning("No text extracted.")
 
-    st.metric("Chunks indexed", st.session_state.vector_store.size)
+    st.caption(f"📎 {st.session_state.vector_store.size} chunks indexed")
 
-    if st.button("Clear all", use_container_width=True):
-        st.session_state.vector_store.clear()
-        st.session_state.chunks = []
-        st.session_state.chat_history = []
-        st.session_state.indexed_files = []
-        st.rerun()
+    if st.session_state.chat_history:
+        st.download_button(
+            "⬇️ Download conversation (.md)",
+            data=export_chat_markdown(),
+            file_name="doraeon_study_session.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
+    col_clear_chat, col_clear_all = st.columns(2)
+    with col_clear_chat:
+        if st.button("Clear chat", use_container_width=True, disabled=not st.session_state.chat_history):
+            st.session_state.chat_history = []
+            st.rerun()
+    with col_clear_all:
+        if st.button("Clear all", use_container_width=True):
+            st.session_state.vector_store.clear()
+            st.session_state.chunks = []
+            st.session_state.chat_history = []
+            st.session_state.indexed_files = []
+            st.rerun()
 
     if not api_ok:
         with st.expander("🔑 Setup OpenAI"):
@@ -190,6 +228,13 @@ with st.sidebar:
 
 # --- Main ---
 render_hero()
+
+if st.session_state.vector_store.size > 0:
+    chunks: list[TextChunk] = st.session_state.chunks
+    document_count = len(set(st.session_state.indexed_files))
+    subject_count = len({c.subject.strip() for c in chunks if c.subject and c.subject.strip()})
+    render_stat_tiles(document_count, st.session_state.vector_store.size, subject_count)
+    render_subject_distribution(chunks)
 
 if not get_openai_api_key():
     render_api_setup_banner(env_setup_hint())
