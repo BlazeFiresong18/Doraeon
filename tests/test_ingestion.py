@@ -130,6 +130,82 @@ def test_page_readable_via_pypdf_fallback_when_pdfplumber_fails():
     assert "This page reads fine via pypdf" in docs[0].text
 
 
+# ---------------------------------------------------------------------------
+# OCR fallback -- triggers only when both text extractors fail (broken font
+# garbage OR a scanned/image page with no text layer). pytesseract and the
+# page rasterization are mocked: the Tesseract binary isn't a test dependency.
+# ---------------------------------------------------------------------------
+
+def test_ocr_recovers_page_that_both_extractors_garbled():
+    with patch("core.ingestion._extract_with_pdfplumber", return_value=["(cid:1)(cid:24)(cid:2)"]), \
+         patch("core.ingestion._extract_with_pypdf", return_value=["\x18\x02\x19\x05"]), \
+         patch("core.ingestion._ocr_available", return_value=True), \
+         patch("core.ingestion._ocr_pdf_page", return_value="Recovered by OCR: web analytics basics.") as mock_ocr:
+        docs, issues = load_pdf_documents(b"fake-pdf-bytes", "broken_font.pdf")
+
+    assert issues == []
+    assert len(docs) == 1
+    assert "Recovered by OCR" in docs[0].text
+    mock_ocr.assert_called_once_with(b"fake-pdf-bytes", 0)
+
+
+def test_ocr_recovers_scanned_page_with_no_text_layer():
+    # A scanned page: both extractors return EMPTY (not garbled) text.
+    # Previously silently skipped -- with OCR available it should be read.
+    with patch("core.ingestion._extract_with_pdfplumber", return_value=[""]), \
+         patch("core.ingestion._extract_with_pypdf", return_value=[""]), \
+         patch("core.ingestion._ocr_available", return_value=True), \
+         patch("core.ingestion._ocr_pdf_page", return_value="Scanned page text found by OCR."):
+        docs, issues = load_pdf_documents(b"fake-pdf-bytes", "scanned.pdf")
+
+    assert issues == []
+    assert len(docs) == 1
+    assert "Scanned page text" in docs[0].text
+
+
+def test_ocr_not_attempted_when_normal_extraction_works():
+    with patch("core.ingestion._ocr_pdf_page") as mock_ocr:
+        pdf_bytes = make_minimal_pdf(["Perfectly normal text page."])
+        docs, issues = load_pdf_documents(pdf_bytes, "normal.pdf")
+
+    assert len(docs) == 1
+    assert not mock_ocr.called  # zero OCR cost on healthy PDFs
+
+
+def test_missing_tesseract_reports_issue_with_install_hint():
+    with patch("core.ingestion._extract_with_pdfplumber", return_value=["(cid:1)(cid:24)(cid:2)"]), \
+         patch("core.ingestion._extract_with_pypdf", return_value=["\x18\x02\x19\x05"]), \
+         patch("core.ingestion._ocr_available", return_value=False):
+        docs, issues = load_pdf_documents(b"fake-pdf-bytes", "broken_font.pdf")
+
+    assert docs == []
+    assert len(issues) == 1
+    assert "install Tesseract" in issues[0].reason
+
+
+def test_ocr_failure_still_reports_issue_not_garbage_index():
+    with patch("core.ingestion._extract_with_pdfplumber", return_value=["(cid:1)(cid:24)(cid:2)"]), \
+         patch("core.ingestion._extract_with_pypdf", return_value=["\x18\x02\x19\x05"]), \
+         patch("core.ingestion._ocr_available", return_value=True), \
+         patch("core.ingestion._ocr_pdf_page", return_value=""):
+        docs, issues = load_pdf_documents(b"fake-pdf-bytes", "broken_font.pdf")
+
+    assert docs == []
+    assert len(issues) == 1
+    assert "OCR also failed" in issues[0].reason
+
+
+def test_blank_page_stays_silently_skipped_even_with_ocr_available():
+    with patch("core.ingestion._extract_with_pdfplumber", return_value=[""]), \
+         patch("core.ingestion._extract_with_pypdf", return_value=[""]), \
+         patch("core.ingestion._ocr_available", return_value=True), \
+         patch("core.ingestion._ocr_pdf_page", return_value=""):
+        docs, issues = load_pdf_documents(b"fake-pdf-bytes", "blank.pdf")
+
+    assert docs == []
+    assert issues == []  # truly blank is not a failure
+
+
 def test_mixed_document_indexes_good_pages_and_reports_bad_ones():
     # Page 1 clean via pdfplumber, page 2 garbled in both extractors.
     with patch(

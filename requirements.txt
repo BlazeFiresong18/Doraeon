@@ -7,5 +7,9 @@ sentence-transformers>=2.6.0
 faiss-cpu>=1.8.0
 pdfplumber>=0.11.0
 pypdf>=4.0.0
+# OCR fallback for scanned or broken-font PDFs. Also requires the Tesseract
+# binary installed system-wide (Windows: winget install UB-Mannheim.TesseractOCR)
+pypdfium2>=4.30.0
+pytesseract>=0.3.10
 numpy>=1.26.0
 python-dotenv>=1.0.0

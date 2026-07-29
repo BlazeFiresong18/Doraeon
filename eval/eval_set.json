@@ -1,23 +1,212 @@
 [
   {
-    "id": "example-1",
-    "question": "REPLACE ME: a question your course materials actually answer",
-    "expected_answer": "REPLACE ME: the correct answer, in your own words, as it should appear in the PDF",
-    "expected_source_filename": "REPLACE ME: exact filename as uploaded, e.g. Lecture3.pdf",
-    "expected_source_page": 1
+    "id": "ch1-audiences",
+    "question": "Who are the three audiences that should use web analytics?",
+    "expected_answer": "Web marketers (responsible for bringing visitors to the site and getting them to complete valuable activities), web operations managers (provide a high-quality web presence to improve marketing success), and web executives (ultimately responsible for the company's online business success and ROI).",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 3
   },
   {
-    "id": "example-2",
-    "question": "REPLACE ME",
-    "expected_answer": "REPLACE ME",
-    "expected_source_filename": "REPLACE ME",
-    "expected_source_page": 1
+    "id": "ch1-analyst-requirement",
+    "question": "What is the single requirement for being a good web analyst?",
+    "expected_answer": "Desire — the desire to improve the quality of one's website.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 3
   },
   {
-    "id": "example-3",
-    "question": "REPLACE ME",
-    "expected_answer": "REPLACE ME",
-    "expected_source_filename": "REPLACE ME",
-    "expected_source_page": 1
+    "id": "ch2-definition",
+    "question": "What is the core definition of web analytics?",
+    "expected_answer": "Understanding the online experience so that it can be improved. It is the monitoring, reporting, and analysis of web site usage, visitor actions, and web site offers to leverage insight for increased customer loyalty and sales.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 4
+  },
+  {
+    "id": "ch2-five-sources",
+    "question": "Name the five types of web analytics data sources.",
+    "expected_answer": "Web server log files, page tagging (JavaScript tags), user surveys and polling, competitive intelligence (panel data), and web server performance data.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 4
+  },
+  {
+    "id": "ch2-improvement-cycle",
+    "question": "What are the steps of the continuous improvement process in web analytics?",
+    "expected_answer": "Measure, report, analyze, test, implement, repeat — a cycle similar to Kaizen or Six Sigma that never ends.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 4
+  },
+  {
+    "id": "ch2-golden-rule",
+    "question": "What is the golden rule of testing in web analytics?",
+    "expected_answer": "Never make a change to your site and then wait a quarter to see if it helped — the effect of most changes is seen quickly on high-traffic sites, so opportunity is lost by waiting. Keep careful track of what changes were made and when, so results can be attributed correctly.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 5
+  },
+  {
+    "id": "ch2-gatekeeper",
+    "question": "What is the gatekeeper role in continuous improvement?",
+    "expected_answer": "Someone with intimate knowledge of every change ever made to the site and its measured effect, assigned so that the same mistakes aren't repeated and improvements aren't lost.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 5
+  },
+  {
+    "id": "ch3-log-formats",
+    "question": "What are the two common web server log file formats?",
+    "expected_answer": "Common Log Format (CLF), the original standard recording host IP, ident, auth user, timestamp, request line, HTTP status, and bytes transferred; and Extended Log Format, which adds referrer URL, user-agent, method, server name and IP, query string, cookies, and more.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 6
+  },
+  {
+    "id": "ch3-log-disadvantages",
+    "question": "What are the serious disadvantages of web server log files?",
+    "expected_answer": "Browser caching (cached pages generate no server request and are invisible in logs), proxy servers (many users share one IP or one user spans many IPs, miscounting unique visitors by 40% or more — the most serious disadvantage), and IP addresses not equating to unique visitors. Robots and crawlers also generate fake traffic.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 6
+  },
+  {
+    "id": "ch3-prefer-logs",
+    "question": "When should an organization prefer log files over page tagging?",
+    "expected_answer": "When it must own all its data in-house (compliance/privacy), when JavaScript-disabled users matter (e.g. B2B or technical audiences), when server performance data is needed alongside traffic data, and when cost is paramount since there are no ongoing vendor fees.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 7
+  },
+  {
+    "id": "ch3-page-tagging",
+    "question": "How does page tagging work as a data collection method?",
+    "expected_answer": "A small JavaScript snippet is placed on every page; when a visitor loads a page the JavaScript executes, collects information about the visit (page URL, referrer, screen resolution, browser, etc.) and sends it to the analytics vendor's data collection server, which processes it and makes reports available via a web interface.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 7
+  },
+  {
+    "id": "ch3-tag-advantages",
+    "question": "What are the advantages of page tags over log files?",
+    "expected_answer": "They bypass proxy caching (the JS fires in the real browser), capture richer visitor data (screen resolution, color depth, language), impose no server load, have lower upfront cost (SaaS), and handle dynamic pages, AJAX, and single-page applications better.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 7
+  },
+  {
+    "id": "ch3-cookies",
+    "question": "What is the difference between first-party and third-party cookies, and which is preferred?",
+    "expected_answer": "A first-party cookie is written from and readable by the same domain as the site being visited — more private and preferred. A third-party cookie is written by an external domain and can track users across sites, raising privacy concerns and triggering ad-blockers. Best practice is to use first-party cookies wherever possible.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 8
+  },
+  {
+    "id": "ch3-panels",
+    "question": "What are measurement panels and what is their main limitation?",
+    "expected_answer": "Third-party panels (like comScore or Nielsen//NetRatings) recruit a statistically representative sample of internet users and monitor their browsing to estimate audience size, demographics, and competitive benchmarks. Their limitation is that the data is estimated and extrapolated from a sample, not exact — small sites can have very large margins of error, so panel data should be treated as directional.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 8
+  },
+  {
+    "id": "ch4-pyramid",
+    "question": "What is the pyramid model of web analytics data?",
+    "expected_answer": "Web analytics data forms a pyramid from plentiful but low-value data at the bottom to rare but actionable data at the top: hits (bottom, least useful), then page views, then visits/sessions, then unique visitors (top, most valuable — closest to real people).",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 9
+  },
+  {
+    "id": "ch4-hits",
+    "question": "Why should hits never be used as a performance metric?",
+    "expected_answer": "A hit is recorded for every file requested — HTML, every image, CSS, JavaScript — so one page view of a complex page can generate 50-200+ hits. Adding one image to a page inflates the hit count with no additional business value, making hits misleading. Page views or visits should be used instead.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 9
+  },
+  {
+    "id": "ch4-ctr",
+    "question": "What is the problem with click-through rate (CTR) and what metric is more useful?",
+    "expected_answer": "CTR is inflated by 'click, oops, back up' behavior — users click accidentally and immediately return. A more useful metric is response rate: the percentage of visitors who actually arrived and took a meaningful action.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 9
+  },
+  {
+    "id": "ch4-visit-timeout",
+    "question": "What is the industry standard timeout for ending a visit or session?",
+    "expected_answer": "30 minutes of inactivity — if there is no activity for 30 consecutive minutes the visit ends, and any subsequent page view starts a new visit.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 10
+  },
+  {
+    "id": "ch4-unique-visitor-caveat",
+    "question": "What is the main caveat about unique visitor counts?",
+    "expected_answer": "Unique visitors are tracked by cookies, so they are technically unique browser/cookie combinations, not unique people. One person using three browsers on two computers counts as six unique visitors, and clearing cookies creates new 'unique visitors' — the count is inflated.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 10
+  },
+  {
+    "id": "ch4-referrer",
+    "question": "What is a referrer and what does it tell you?",
+    "expected_answer": "The referrer is the URL of the page a visitor was on immediately before arriving at your site, sent by the browser in the HTTP header. It tells you which search engine sent the visitor (and the search term), which sites link to you and send traffic, and whether the visitor came directly (no referrer).",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 10
+  },
+  {
+    "id": "ch4-attrition",
+    "question": "How is attrition defined in web analytics?",
+    "expected_answer": "Attrition is the number of people you successfully converted once but are unable to retain to convert again — converted visitors you cannot re-convert.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 11
+  },
+  {
+    "id": "ch5-strategies",
+    "question": "What are the three content organization strategies?",
+    "expected_answer": "Directory structure (using the site's natural folder structure — simplest, fails on cryptic or dynamic sites), information architecture view (mapping URLs to the site's navigation structure — becoming the standard), and business objective organization (organizing content by the business goal each page accomplishes — the most strategically powerful).",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 12
+  },
+  {
+    "id": "ch6-conversion-rate",
+    "question": "How is conversion rate calculated in process measurement?",
+    "expected_answer": "Conversion rate = completions divided by starters, times 100 — the percentage of visitors who started a process and successfully finished it. Step abandonment rate is visitors lost at a specific step divided by visitors who reached that step, times 100.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 14
+  },
+  {
+    "id": "ch6-backcountry",
+    "question": "What did the BackcountryStore.com conversion funnel example show?",
+    "expected_answer": "236 visitors started the checkout process but only 67 (28.38%) completed it. A mandatory registration step caused the biggest abandonment (120 people dropped there). Removing compulsory registration led to a 20% increase in site-wide conversion rate, rising to 30% during peak sales periods.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 14
+  },
+  {
+    "id": "ch6-ab-testing",
+    "question": "What is the best practice for A/B testing variables?",
+    "expected_answer": "Test one variable at a time whenever possible — if you test a new headline and a new button color simultaneously, you won't know which change drove the improvement. Multivariate testing requires significantly more traffic and is more complex to analyze.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 15
+  },
+  {
+    "id": "ch7-segment-conversion",
+    "question": "What is segment conversion in visitor segmentation?",
+    "expected_answer": "Tracking how visitors move from lower-value to higher-value groups over time — for example, unregistered visitor to registered user to first-time buyer to repeat buyer. Understanding how long this journey takes and where it breaks down is key to improving customer acquisition.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 16
+  },
+  {
+    "id": "ch8-campaign-metrics",
+    "question": "What are the two fundamental campaign metrics and their formulas?",
+    "expected_answer": "Response rate = respondents divided by total impressions served, times 100 (what percentage of people who saw the message came to the site). Conversion rate = conversions divided by respondents, times 100 (of those who came, what percentage did the desired action). Both are needed to evaluate a campaign.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 18
+  },
+  {
+    "id": "ch9-browse-to-buy",
+    "question": "What is the Browse-to-Buy ratio?",
+    "expected_answer": "The number of product page views divided by orders. A high B/B% means visitors browse a lot before buying; a low B/B% means efficient buying. It is useful for comparing the quality of traffic partners.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 20
+  },
+  {
+    "id": "ch10-lifecycle",
+    "question": "What are the four stages of the customer life cycle?",
+    "expected_answer": "Reach (gaining the attention of a prospective visitor, measured before they arrive), Acquisition (getting a person within your reach to actually visit the site), Conversion (getting acquired visitors to complete a desired activity), and Retention (getting converted customers to return and convert again).",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 22
+  },
+  {
+    "id": "ch10-reach-measurement",
+    "question": "Why is reach both easy and hard to measure?",
+    "expected_answer": "Reach is easy to quantify (an ad network reports how many impressions were served) but impossible to verify (there's no way to know how many of those people actually saw and processed the message), so reach numbers should be treated as directional estimates, not precise figures.",
+    "expected_source_filename": "Web_Analytics_StudyGuide.pdf",
+    "expected_source_page": 22
   }
 ]

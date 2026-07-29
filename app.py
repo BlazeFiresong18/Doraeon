@@ -51,9 +51,18 @@ if "extraction_issues" not in st.session_state:
     st.session_state.extraction_issues: list = []
 
 
-def build_index(uploaded_files: list, subject: str, unit: str, chunk_size: int, overlap: int) -> tuple[int, int]:
+def build_index(
+    uploaded_files: list,
+    subject: str,
+    unit: str,
+    chunk_size: int,
+    overlap: int,
+    on_progress=None,
+) -> tuple[int, int]:
     file_data = [(f.getvalue(), f.name) for f in uploaded_files]
-    documents, issues = load_multiple_pdfs(file_data, default_subject=subject, default_unit=unit)
+    documents, issues = load_multiple_pdfs(
+        file_data, default_subject=subject, default_unit=unit, on_progress=on_progress
+    )
     # Surfaced regardless of whether any documents came back -- a PDF that
     # fails on every page should be visible, not silently produce "0 chunks"
     # with no explanation.
@@ -177,11 +186,12 @@ with st.sidebar:
             1.0,
             get_min_retrieval_score(),
             step=0.05,
-            help="Below this similarity score, Doraeon refuses to answer instead of guessing.",
+            help="Minimum similarity for an answer to count as grounded in your materials. "
+            "Scores of 40-70% are often legitimately good matches in RAG -- don't set this too high.",
         )
         strict_mode = st.checkbox(
             "Strict mode: only answer from uploaded materials",
-            value=True,
+            value=False,
             help="On: refuse when nothing clears the confidence threshold (exam-prep grounding). "
             "Off: fall back to general knowledge with a clear disclaimer, and no source citations "
             "on that fallback answer (general help).",
@@ -193,9 +203,28 @@ with st.sidebar:
         uploaded = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
         if uploaded and st.button("Build index", type="primary", use_container_width=True):
             issues_before = len(st.session_state.extraction_issues)
-            with st.spinner("Indexing…"):
+            # st.status instead of st.spinner: OCR fallback pages are slow
+            # (seconds per page), and the label + body update live so a big
+            # scanned PDF shows per-page progress instead of appearing frozen.
+            # Starts expanded so that progress is visible as it happens, then
+            # collapses once done to keep the sidebar tidy.
+            with st.status("Indexing your PDFs…", expanded=True) as status:
+                def _report(msg: str) -> None:
+                    status.update(label=msg)
+                    st.caption(f"🔎 {msg}")
+
                 n_docs, n_chunks = build_index(
-                    uploaded, (default_subject or "").strip(), (default_unit or "").strip(), chunk_size, overlap
+                    uploaded,
+                    (default_subject or "").strip(),
+                    (default_unit or "").strip(),
+                    chunk_size,
+                    overlap,
+                    on_progress=_report,
+                )
+                status.update(
+                    label=f"Indexed {n_docs} page(s) → {n_chunks} chunk(s)",
+                    state="complete",
+                    expanded=False,
                 )
             new_issues = st.session_state.extraction_issues[issues_before:]
             if n_chunks:
