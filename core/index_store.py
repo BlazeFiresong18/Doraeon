@@ -18,7 +18,7 @@ from llama_index.core.schema import BaseNode
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.faiss import FaissVectorStore
 
-from core.config import EMBEDDING_DIM, EMBEDDING_MODEL_NAME
+from core.config import EMBEDDING_DIM, EMBEDDING_MODEL_NAME, EMBEDDING_QUERY_INSTRUCTION
 
 _HEADING_PATTERN = re.compile(r"^(unit|chapter|ch\.?|module|topic|lecture)\s*[\d.:]+", re.IGNORECASE)
 
@@ -41,7 +41,13 @@ def _detect_topic_heading(text: str) -> str:
 def build_embed_model() -> HuggingFaceEmbedding:
     # normalize=True -> L2-normalized embeddings, so inner product on the
     # FAISS IndexFlatIP below is exactly cosine similarity, not raw dot product.
-    return HuggingFaceEmbedding(model_name=EMBEDDING_MODEL_NAME, normalize=True)
+    # query_instruction only applies to queries (asymmetric retrieval) --
+    # bge-small-en-v1.5 is trained expecting this prefix on the query side only.
+    return HuggingFaceEmbedding(
+        model_name=EMBEDDING_MODEL_NAME,
+        query_instruction=EMBEDDING_QUERY_INSTRUCTION,
+        normalize=True,
+    )
 
 
 def _word_splitter(chunk_size: int, chunk_overlap: int) -> SentenceSplitter:

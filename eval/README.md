@@ -31,9 +31,9 @@ Optional flags: `--materials-dir`, `--eval-set`, `--top-k` (default 5), `--page-
 ## What it measures
 
 - **Precision@k**: did the real retrieval pipeline actually surface the correct chunk in its top-k results for each question?
-- **Accuracy**: an LLM-as-judge call (using your configured `OPENAI_MODEL`) grades each generated answer against your `expected_answer` as correct/partial/incorrect.
+- **Accuracy**: an LLM-as-judge call (your local Ollama model, configured via `OLLAMA_MODEL`) grades each generated answer against your `expected_answer` as correct/partial/incorrect. Uses a separate temperature=0.0 instance for deterministic grading.
 - **Refused**: questions the hallucination guardrail declined to answer (below the confidence threshold). A refusal on a question that *does* have a real answer in your materials is a sign the threshold may be set too high — not counted as "wrong," reported separately so it's visible.
 
-Requires `OPENAI_API_KEY` in `.env` for answer generation and grading. Without it, precision@k still runs (pure retrieval, no LLM needed).
+Requires Ollama installed and running (`ollama serve`) with the configured model pulled. Without it, generation and grading fail per-question (reported as "ungraded"); precision@k still runs regardless since it's pure retrieval, no LLM needed.
 
 Output: `eval_report.md` (human-readable) and `eval_report.csv` (for a spreadsheet), both in `eval/` by default.

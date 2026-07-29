@@ -1,5 +1,8 @@
 streamlit>=1.32.0
-openai>=1.14.0
+# Local LLM via Ollama -- no API key, no per-token cost. Also requires the
+# Ollama app/server installed separately (https://ollama.com/download) and a
+# model pulled (e.g. `ollama pull llama3.2`).
+llama-index-llms-ollama>=0.10.0
 llama-index-core>=0.14.0
 llama-index-vector-stores-faiss>=0.6.0
 llama-index-embeddings-huggingface>=0.7.0

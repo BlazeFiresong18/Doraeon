@@ -1,18 +1,16 @@
 """Orchestrates one turn: condense follow-up -> retrieve -> confidence
 guardrail -> generate -> attribution. Each step is independently testable
 (see core/retrieval.py, core/query_rewriting.py) -- this module wires them
-together and owns the OpenAI client and the guardrail decision."""
+together and owns the local Ollama LLM and the guardrail decision."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 
-from openai import OpenAI
-
-from core.config import get_min_retrieval_score, get_openai_api_key, get_openai_model
+from core.config import get_min_retrieval_score, get_ollama_base_url, get_ollama_model
 from core.index_store import DoraeonIndex
-from core.llm_client import call_chat_completion, error_message
+from core.llm_client import build_llm, call_chat_completion, error_message
 from core.query_rewriting import HistoryTurn, rewrite_standalone_question
 from core.retrieval import ScoredChunk, retrieve
 
@@ -67,7 +65,6 @@ class RAGResponse:
     error: str | None = None
     retrieval_ms: float = 0.0
     generation_ms: float = 0.0
-    api_configured: bool = True
     # Set only when a follow-up was condensed and the rewrite actually
     # changed it -- lets the UI show what was actually searched for.
     rewritten_question: str | None = None
@@ -98,10 +95,8 @@ def _format_context(chunks: list[ScoredChunk]) -> str:
 class RAGPipeline:
     def __init__(self, doraeon_index: DoraeonIndex, model: str | None = None):
         self.doraeon_index = doraeon_index
-        self.model = model or get_openai_model()
-        api_key = get_openai_api_key()
-        self.api_configured = bool(api_key)
-        self.client: OpenAI | None = OpenAI(api_key=api_key) if api_key else None
+        self.model = model or get_ollama_model()
+        self.llm = build_llm(self.model, get_ollama_base_url())
 
     def generate_answer(
         self,
@@ -113,7 +108,7 @@ class RAGPipeline:
         history: list[HistoryTurn] | None = None,
         strict_mode: bool = True,
     ) -> RAGResponse:
-        search_question = rewrite_standalone_question(self.client, self.model, question, history or [])
+        search_question = rewrite_standalone_question(self.llm, question, history or [])
         rewritten = search_question if search_question != question else None
 
         t0 = time.perf_counter()
@@ -125,7 +120,6 @@ class RAGPipeline:
                 answer="Upload PDFs and build your index first — I don't have any materials to search yet.",
                 sources=[],
                 retrieval_ms=retrieval_ms,
-                api_configured=self.api_configured,
                 rewritten_question=rewritten,
                 grounded=False,
             )
@@ -153,7 +147,6 @@ class RAGPipeline:
                     sources=results,
                     error="below_confidence_threshold",
                     retrieval_ms=retrieval_ms,
-                    api_configured=self.api_configured,
                     rewritten_question=rewritten,
                     grounded=False,
                     refused=True,
@@ -166,7 +159,7 @@ class RAGPipeline:
                     "content": GENERAL_KNOWLEDGE_USER_PROMPT_TEMPLATE.format(question=search_question),
                 },
             ]
-            raw_answer, generation_ms, err = call_chat_completion(self.client, self.model, messages)
+            raw_answer, generation_ms, err = call_chat_completion(self.llm, messages)
 
             if err:
                 return RAGResponse(
@@ -175,7 +168,6 @@ class RAGPipeline:
                     error=err,
                     retrieval_ms=retrieval_ms,
                     generation_ms=generation_ms,
-                    api_configured=self.api_configured,
                     rewritten_question=rewritten,
                     grounded=False,
                 )
@@ -185,7 +177,6 @@ class RAGPipeline:
                 sources=results,
                 retrieval_ms=retrieval_ms,
                 generation_ms=generation_ms,
-                api_configured=True,
                 rewritten_question=rewritten,
                 grounded=False,
                 refused=False,
@@ -197,7 +188,7 @@ class RAGPipeline:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ]
-        answer, generation_ms, err = call_chat_completion(self.client, self.model, messages)
+        answer, generation_ms, err = call_chat_completion(self.llm, messages)
 
         if err:
             return RAGResponse(
@@ -206,7 +197,6 @@ class RAGPipeline:
                 error=err,
                 retrieval_ms=retrieval_ms,
                 generation_ms=generation_ms,
-                api_configured=self.api_configured,
                 rewritten_question=rewritten,
             )
 
@@ -215,6 +205,5 @@ class RAGPipeline:
             sources=results,
             retrieval_ms=retrieval_ms,
             generation_ms=generation_ms,
-            api_configured=True,
             rewritten_question=rewritten,
         )

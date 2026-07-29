@@ -456,6 +456,6 @@ def render_empty_chat_state() -> None:
     )
 
 
-def render_api_setup_banner(hint: str) -> None:
-    st.warning("🔑 **OpenAI API key required for AI answers**")
+def render_setup_banner(hint: str) -> None:
+    st.warning("⚙️ **Ollama isn't reachable -- AI answers are disabled**")
     st.markdown(hint)

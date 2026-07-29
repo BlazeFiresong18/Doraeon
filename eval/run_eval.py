@@ -23,14 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from openai import OpenAI  # noqa: E402
-
-from core.config import get_openai_api_key, get_openai_model, load_settings  # noqa: E402
+from core.config import get_ollama_base_url, get_ollama_model, load_settings  # noqa: E402
 from core.ingestion import load_multiple_pdfs  # noqa: E402
 from core.index_store import DoraeonIndex  # noqa: E402
-from core.llm_client import call_chat_completion  # noqa: E402
+from core.llm_client import build_llm, call_chat_completion, check_ollama_status, error_message  # noqa: E402
 from core.rag_pipeline import RAGPipeline  # noqa: E402
-from core.retrieval import retrieve  # noqa: E402
 
 JUDGE_PROMPT = """You are grading a student-facing academic answer for correctness.
 
@@ -91,11 +88,11 @@ def precision_at_k(sources, expected_filename: str, expected_page: int, page_tol
     return False
 
 
-def grade_with_llm(client: OpenAI, model: str, question: str, expected: str, generated: str) -> tuple[str, str]:
+def grade_with_llm(judge_llm, question: str, expected: str, generated: str) -> tuple[str, str]:
     prompt = JUDGE_PROMPT.format(question=question, expected=expected, generated=generated)
-    text, _ms, err = call_chat_completion(client, model, [{"role": "user", "content": prompt}], temperature=0.0)
+    text, _ms, err = call_chat_completion(judge_llm, [{"role": "user", "content": prompt}])
     if err:
-        return "ungraded", f"LLM judge call failed: {err}"
+        return "ungraded", f"LLM judge call failed: {error_message(err)}"
 
     verdict_match = re.search(r"VERDICT:\s*(correct|partial|incorrect)", text, re.IGNORECASE)
     reason_match = re.search(r"REASON:\s*(.+)", text, re.IGNORECASE)
@@ -110,14 +107,16 @@ def run(materials_dir: Path, eval_set_path: Path, top_k: int, page_tolerance: in
     pipeline = RAGPipeline(idx)
 
     eval_items = json.loads(eval_set_path.read_text(encoding="utf-8"))
-    api_key = get_openai_api_key()
-    judge_client = OpenAI(api_key=api_key) if api_key else None
-    judge_model = get_openai_model()
+    judge_model = get_ollama_model()
+    # temperature=0.0, separate from the pipeline's own LLM (which uses 0.2) --
+    # deterministic grading, and Ollama fixes temperature at construction time.
+    judge_llm = build_llm(judge_model, get_ollama_base_url(), temperature=0.0)
 
-    if not api_key:
+    ollama_ready, status_msg = check_ollama_status(judge_model, get_ollama_base_url())
+    if not ollama_ready:
         print(
-            "WARNING: no OpenAI API key configured -- answer generation and accuracy "
-            "grading will be skipped. Precision@k will still run (retrieval only)."
+            f"WARNING: {status_msg}\nAnswer generation and accuracy grading will fail per-question "
+            "(reported as 'ungraded' below). Precision@k still runs -- it's pure retrieval, no LLM needed."
         )
 
     results: list[EvalResult] = []
@@ -132,30 +131,16 @@ def run(materials_dir: Path, eval_set_path: Path, top_k: int, page_tolerance: in
             print(f"Skipping placeholder item '{item.get('id', '?')}' -- fill in eval_set.json first.")
             continue
 
-        if not api_key:
-            retrieved = retrieve(idx, question, top_k=top_k)
-            results.append(
-                EvalResult(
-                    id=item.get("id", ""),
-                    question=question,
-                    expected_source=expected_source,
-                    retrieved_sources="; ".join(f"{c.filename} p.{c.page_number}" for c in retrieved),
-                    precision_hit=precision_at_k(retrieved, expected_filename, expected_page, page_tolerance),
-                    top_score=retrieved[0].confidence if retrieved else 0.0,
-                    generated_answer="(skipped -- no API key)",
-                    verdict="ungraded",
-                )
-            )
-            continue
-
         resp = pipeline.generate_answer(question, top_k=top_k)
         precision_hit = precision_at_k(resp.sources, expected_filename, expected_page, page_tolerance)
         top_score = resp.sources[0].confidence if resp.sources else 0.0
 
         if resp.error == "below_confidence_threshold":
             verdict, reason = "refused", "Guardrail refused to answer (below confidence threshold)."
+        elif resp.error:
+            verdict, reason = "ungraded", f"Generation failed: {error_message(resp.error)}"
         else:
-            verdict, reason = grade_with_llm(judge_client, judge_model, question, expected_answer, resp.answer)
+            verdict, reason = grade_with_llm(judge_llm, question, expected_answer, resp.answer)
 
         results.append(
             EvalResult(

@@ -6,7 +6,7 @@ regardless of whether the underlying content exists."""
 
 from __future__ import annotations
 
-from openai import OpenAI
+from llama_index.llms.ollama import Ollama
 
 from core.llm_client import call_chat_completion
 
@@ -52,8 +52,7 @@ def extract_history_turns(messages: list[dict], max_turns: int = MAX_HISTORY_TUR
 
 
 def rewrite_standalone_question(
-    client: OpenAI | None,
-    model: str,
+    llm: Ollama | None,
     question: str,
     history: list[HistoryTurn],
 ) -> str:
@@ -61,7 +60,7 @@ def rewrite_standalone_question(
     history to draw on -- the common case for a first message. On any LLM
     failure, falls back to the original question rather than blocking the
     turn on a rewrite error."""
-    if not history or not client:
+    if not history or not llm:
         return question
 
     recent = history[-MAX_HISTORY_TURNS_FOR_CONDENSING:]
@@ -69,7 +68,7 @@ def rewrite_standalone_question(
         f"User: {q}\nAssistant: {a[:_HISTORY_ANSWER_TRUNCATE_CHARS]}" for q, a in recent
     )
     prompt = CONDENSE_PROMPT_TEMPLATE.format(history=history_text, question=question)
-    rewritten, _ms, err = call_chat_completion(client, model, [{"role": "user", "content": prompt}])
+    rewritten, _ms, err = call_chat_completion(llm, [{"role": "user", "content": prompt}])
     if err or not rewritten.strip():
         return question
     return rewritten.strip()

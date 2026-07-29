@@ -1,4 +1,9 @@
-"""Centralized environment and OpenAI configuration."""
+"""Centralized environment and local-model configuration.
+
+Doraeon runs fully offline after the one-time model downloads/pulls: the LLM
+is a local Ollama model (no API key, no per-token cost), and embeddings are a
+local sentence-transformers model loaded via LlamaIndex's HuggingFace wrapper.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,21 @@ ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
+# Tried bge-small-en-v1.5 as an upgrade (empirically confirmed elsewhere to
+# have somewhat better raw retrieval accuracy) but reverted: its cosine
+# similarity distribution doesn't separate relevant from irrelevant text
+# cleanly enough for a threshold-based guardrail to work. Confirmed against
+# a real indexed document -- a nonsense query ("asdkjfh qwoeiur zxcvbn")
+# scored 0.65-0.72, HIGHER than a genuine in-document term ("bounce rate",
+# 0.64-0.69), with or without the model's recommended query instruction
+# prefix. MiniLM keeps unrelated text near 0.0-0.2 and relevant text at
+# 0.3-0.8+, a wide, reliable gap the guardrail's single global threshold
+# depends on. Not a compatibility issue -- both models work fine mechanically,
+# this one just isn't fit for this app's confidence-threshold design.
+EMBEDDING_QUERY_INSTRUCTION = None
+
+DEFAULT_OLLAMA_MODEL = "llama3.2"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
 _loaded = False
 
@@ -28,17 +48,14 @@ def load_settings() -> None:
     _loaded = True
 
 
-def get_openai_api_key() -> str | None:
+def get_ollama_model() -> str:
     load_settings()
-    key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if not key or key.lower() in {"your_openai_api_key_here", "sk-your-key-here"}:
-        return None
-    return key
+    return os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
 
 
-def get_openai_model() -> str:
+def get_ollama_base_url() -> str:
     load_settings()
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL)
 
 
 def get_min_retrieval_score(default: float = 0.35) -> float:
@@ -63,14 +80,15 @@ def env_file_exists() -> bool:
 
 
 def env_setup_hint() -> str:
-    env_path = ENV_FILE.resolve()
-    if env_file_exists():
-        return (
-            f"`.env` exists at `{env_path}` but `OPENAI_API_KEY` is missing or still a placeholder. "
-            "Add a valid key and refresh this page."
-        )
+    model = get_ollama_model()
+    base_url = get_ollama_base_url()
     return (
-        f"Create a `.env` file at:\n\n**`{env_path}`**\n\n"
-        "```\nOPENAI_API_KEY=sk-your-key-here\nOPENAI_MODEL=gpt-4o-mini\n```\n\n"
-        "Copy from `.env.example` in the project root."
+        "Doraeon needs a local [Ollama](https://ollama.com/download) server with a model pulled:\n\n"
+        "```\n"
+        "1. Install Ollama\n"
+        f"2. ollama pull {model}\n"
+        "3. ollama serve\n"
+        "```\n\n"
+        f"Optionally override the model or address in `.env`:\n\n```\nOLLAMA_MODEL={model}\n"
+        f"OLLAMA_BASE_URL={base_url}\n```"
     )

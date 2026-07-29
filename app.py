@@ -1,27 +1,29 @@
 """
 Doraeon — AI-powered academic RAG assistant.
-Streamlit frontend built on LlamaIndex + FAISS + OpenAI (see core/).
+Streamlit frontend built on LlamaIndex + FAISS + a local Ollama LLM (see core/).
+Runs fully offline, no API key or per-token cost.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from core.config import env_setup_hint, get_min_retrieval_score, get_openai_api_key, load_settings
+from core.config import env_setup_hint, get_min_retrieval_score, get_ollama_base_url, get_ollama_model, load_settings
 from core.index_store import DoraeonIndex
 from core.ingestion import load_multiple_pdfs
+from core.llm_client import check_ollama_status
 from core.query_rewriting import extract_history_turns
 from core.rag_pipeline import RAGPipeline, RAGResponse
 from core.study_tools import generate_flashcards, predict_exam_questions, summarize_topic
 from core.ui_components import (
     inject_global_css,
     render_answer_card,
-    render_api_setup_banner,
     render_citation_pills,
     render_empty_chat_state,
     render_empty_upload_state,
     render_hero,
     render_meta_strip,
+    render_setup_banner,
     render_source_expander,
     render_stat_tiles,
     render_subject_distribution,
@@ -141,9 +143,7 @@ def render_assistant_message(msg: dict) -> None:
     if msg.get("rewritten_question"):
         st.caption(f"🔎 Searched for: _{msg['rewritten_question']}_")
 
-    if msg.get("error") == "missing_api_key":
-        st.info(msg["content"])
-    elif refused:
+    if refused:
         st.warning(f"🚫 {msg['content']}")
     else:
         if not grounded and not msg.get("error"):
@@ -166,11 +166,8 @@ def render_assistant_message(msg: dict) -> None:
 # --- Sidebar ---
 with st.sidebar:
     st.markdown("### 📚 Doraeon")
-    api_ok = bool(get_openai_api_key())
-    if api_ok:
-        st.caption("🟢 OpenAI ready")
-    else:
-        st.caption("🟡 API key not configured")
+    ollama_ready, ollama_status_msg = check_ollama_status(get_ollama_model(), get_ollama_base_url())
+    st.caption(f"{'🟢' if ollama_ready else '🟡'} {ollama_status_msg}")
 
     with st.expander("⚙️ Index & filters", expanded=True):
         default_subject = st.text_input("Subject", placeholder="CS101", label_visibility="collapsed")
@@ -266,8 +263,8 @@ with st.sidebar:
             st.session_state.extraction_issues = []
             st.rerun()
 
-    if not api_ok:
-        with st.expander("🔑 Setup OpenAI"):
+    if not ollama_ready:
+        with st.expander("⚙️ Setup Ollama"):
             st.markdown(env_setup_hint())
 
 # --- Main ---
@@ -281,8 +278,8 @@ if st.session_state.doraeon_index.node_count > 0:
     render_stat_tiles(document_count, st.session_state.doraeon_index.node_count, subject_count)
     render_subject_distribution([m.get("subject", "") for m in chunks_meta])
 
-if not get_openai_api_key():
-    render_api_setup_banner(env_setup_hint())
+if not ollama_ready:
+    render_setup_banner(env_setup_hint())
 
 subj_filter = (filter_subject or "").strip() or None
 unit_filter = (filter_unit or "").strip() or None

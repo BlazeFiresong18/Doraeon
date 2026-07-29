@@ -1,7 +1,7 @@
 """
 Guardrail tests using REAL retrieval/embeddings (the actual reported bug was
-about real scoring behavior) with the OpenAI generation call mocked out
-(no real network cost for the LLM step, which isn't what's being tested here).
+about real scoring behavior) with the Ollama generation call mocked out (no
+real local model needed for the LLM step, which isn't what's being tested here).
 """
 
 from unittest.mock import patch
@@ -137,7 +137,7 @@ def test_soft_mode_general_knowledge_prompt_does_not_include_retrieved_context()
         mock_call.return_value = ("answer", 10.0, None)
         pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
 
-    sent_messages = mock_call.call_args.args[2]
+    sent_messages = mock_call.call_args.args[1]
     user_message = sent_messages[1]["content"]
     assert "Web analytics is the measurement" not in user_message  # no leaked irrelevant context
     assert "what is communication" in user_message.lower()
@@ -161,9 +161,9 @@ def test_soft_mode_fallback_llm_failure_is_reported_as_error_not_general_knowled
     pipeline = _pipeline_with_indexed_doc()
 
     with patch("core.rag_pipeline.call_chat_completion") as mock_call:
-        mock_call.return_value = ("", 5.0, "rate_limit")
+        mock_call.return_value = ("", 5.0, "connection_error")
         resp = pipeline.generate_answer("what is communication", min_score=0.35, strict_mode=False)
 
-    assert resp.error == "rate_limit"
+    assert resp.error == "connection_error"
     assert resp.grounded is False
-    assert "rate limit" in resp.answer.lower()
+    assert "ollama" in resp.answer.lower()
